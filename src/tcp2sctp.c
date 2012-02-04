@@ -17,6 +17,13 @@
 #define CONNECTION_UP 1
 #define CONNECTION_DESTROYED 2
 
+#ifdef DEBUG
+#define logmsg printf
+#else
+#define logmsg(x,a...)
+#endif
+
+
 #define BUFFER_SIZE 8192
 typedef struct buffer {
 	char b[BUFFER_SIZE];
@@ -93,7 +100,7 @@ void buffer_increment(buffer_t *b, size_t len)
 int buffer_consume(buffer_t *b, size_t len)
 {
 
-	printf("Decrementing %ld from %ld \n",len, b->pos);
+	logmsg("Decrementing %ld from %ld \n",len, b->pos);
 	if ( len == b->pos ) {
 		b->pos = 0;
 		return b->pos;
@@ -102,7 +109,7 @@ int buffer_consume(buffer_t *b, size_t len)
 	memmove(b->b, b->b + len, b->pos - len);
 	b->pos -= len;
 
-	printf("to %ld\n",b->pos);
+	logmsg("to %ld\n",b->pos);
 	return b->pos;
 }
 
@@ -148,12 +155,12 @@ void tcp_close(evtcp_t *evtcp)
 
 	if (pair->sctpup == CONNECTION_DESTROYED) {
 		free(pair);
-		printf("Free @ TCP\n");
+		logmsg("Free @ TCP\n");
 	} else {
 		pair->tcpup = CONNECTION_DESTROYED;
 	}
 
-	printf("tcp closed\n");
+	logmsg("tcp closed\n");
 }
 
 void tcp_read(evtcp_t *evtcp)
@@ -163,12 +170,12 @@ void tcp_read(evtcp_t *evtcp)
 	size_t readn;
 
 	if (mayread == 0) {
-		printf("buffer is full\n");
+		logmsg("buffer is full\n");
 		evtcp_stopread(&pair->evtcp);
 		return;
 	}
 
-	printf("Reading %ld\n", mayread);
+	logmsg("Reading %ld\n", mayread);
 	readn = recv(EVTCP_SOCKET(evtcp), buffer_current(&pair->tcpin), mayread, 0);
 
 	if (readn == 0) {
@@ -180,7 +187,7 @@ void tcp_read(evtcp_t *evtcp)
 	}
 
 	buffer_increment(&pair->tcpin, readn);
-	printf("Read %ld\n", readn);
+	logmsg("Read %ld\n", readn);
 
 	evsctp_wantwrite(&pair->evsctp);
 }
@@ -192,7 +199,7 @@ void tcp_write(evtcp_t *evtcp)
 	size_t bpos = buffer_position(&pair->tcpout);
 	char *bwrite = buffer_begin(&pair->tcpout);
 
-	printf("tcp writing %ld\n", bpos);
+	logmsg("tcp writing %ld\n", bpos);
 	nwrite = write(EVSCTP_SOCKET((&pair->evtcp)), bwrite, bpos);
 
 	if ( nwrite > 0) {
@@ -227,18 +234,18 @@ void tcp_accept(evtcp_t *server)
 
 	if (EVTCP_SOCKET((&pair->evtcp)) < 0) {
 		free(pair);
-		printf("error accepting\n");
+		logmsg("error accepting\n");
 		return;
 	}
 
 	evtcp_nonblock(&pair->evtcp);
 
-	printf("TCP accepted\n");
+	logmsg("TCP accepted\n");
 	pair->tcpup = CONNECTION_UP;
 
 	/* connect sctp side */
-	if (evsctp_connect(&pair->evsctp, "127.0.0.1", 3869)) {
-		printf("Error connecting SCTP\n");
+	if (evsctp_connect(&pair->evsctp, "192.168.102.129", 3868)) {
+		logmsg("Error connecting SCTP\n");
 		return;
 	}
 }
@@ -249,7 +256,7 @@ void sctp_connect(evsctp_t *evsctp)
 	proxypair_t *pair = (proxypair_t *) evsctp->data;
 	evtcp_wantread(&pair->evtcp);
 	evsctp_wantread(&pair->evsctp);
-	printf("SCTP connected\n");
+	logmsg("SCTP connected\n");
 	pair->sctpup = CONNECTION_UP;
 }
 
@@ -260,12 +267,12 @@ void sctp_read(evsctp_t *evsctp)
 	size_t readn;
 
 	if (mayread == 0) {
-		printf("buffer is full\n");
+		logmsg("buffer is full\n");
 		evsctp_stopread(&pair->evsctp);
 		return;
 	}
 
-	printf("Reading %ld\n", mayread);
+	logmsg("Reading %ld\n", mayread);
 	readn = recv(EVTCP_SOCKET(evsctp), buffer_current(&pair->tcpout), mayread, 0);
 
 	if (readn == 0) {
@@ -277,10 +284,19 @@ void sctp_read(evsctp_t *evsctp)
 	}
 
 	buffer_increment(&pair->tcpout, readn);
-	printf("Read %ld\n", readn);
+	logmsg("Read %ld\n", readn);
 
 	evtcp_wantwrite(&pair->evtcp);
 
+}
+
+
+uint32_t ntoh24(uint32_t value) {
+#ifdef WORDS_BIGENDIAN
+	return ntohl(value);
+#else
+	return ntohl(value << 8);
+#endif
 }
 
 void sctp_write(evsctp_t *evsctp)
@@ -290,9 +306,23 @@ void sctp_write(evsctp_t *evsctp)
 	size_t bpos = buffer_position(&pair->tcpin);
 	char *bwrite = buffer_begin(&pair->tcpin);
 
-	//offset a diameter message
+	if (bpos < CDIAM_WIRE_HEADER_SIZE) {
+		//still don't have a full diameter header
+		evsctp_stopwrite(&pair->evsctp);
+		return;
+	}
 
-	printf("sctp writing %ld\n", bpos);
+	struct cdiam_wire_header *head = (struct cdiam_wire_header *) bwrite;
+
+	uint32_t diam_length = ntoh24(head->length);
+
+	if (bpos < diam_length) {
+		//still don't have a full diameter message
+		evsctp_stopwrite(&pair->evsctp);
+		return;
+	}
+
+	logmsg("diam length %u, sctp writing %ld\n", diam_length, bpos);
 	nwrite = write(EVSCTP_SOCKET((&pair->evsctp)), bwrite, bpos);
 
 	if ( nwrite > 0) {
@@ -320,11 +350,11 @@ void sctp_close(evsctp_t *evsctp)
 
 	if (pair->tcpup == CONNECTION_DESTROYED) {
 		free(pair);
-		printf("Free @ SCTP\n");
+		logmsg("Free @ SCTP\n");
 	} else {
 		pair->sctpup = CONNECTION_DESTROYED;
 	}
-	printf("sctp closed\n");
+	logmsg("sctp closed\n");
 }
 
 

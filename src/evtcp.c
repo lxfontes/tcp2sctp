@@ -91,7 +91,6 @@ void evtcp_write(struct ev_loop *loop, ev_io *w, int revents)
 void evtcp_wantread(evtcp_t *evtcp)
 {
 	if (! ev_is_active(&evtcp->readw)) {
-		printf("want read on %d\n", evtcp->socket);
 		ev_io_init(&evtcp->readw, evtcp_read, evtcp->socket, EV_READ);
 		ev_io_start(evtcp->sops.loop, &evtcp->readw);
 	}
@@ -101,7 +100,6 @@ void evtcp_stopread(evtcp_t *evtcp)
 {
 
 	if (ev_is_active(&evtcp->readw)) {
-		printf("stop read on %d\n", evtcp->socket);
 		ev_io_stop(evtcp->sops.loop, &evtcp->readw);
 	}
 }

@@ -1,0 +1,3 @@
+src/*.o
+src/tcp2sctp
+src/cdiam_endian
